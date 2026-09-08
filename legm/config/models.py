@@ -150,6 +150,34 @@ class RecommendationConfig(BaseModel):
     weights: RecommendationWeights = Field(default_factory=RecommendationWeights)
 
 
+class LineupConfig(BaseModel):
+    """Daily lineup optimizer settings.
+
+    Injury status is free text from whatever source loaded it, so statuses are
+    matched case-insensitively and anything unrecognised falls back to
+    `default_probability` rather than silently benching a player.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    play_probability: dict[str, float] = Field(default_factory=dict)
+    default_probability: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("play_probability")
+    @classmethod
+    def _in_unit_interval(cls, v: dict[str, float]) -> dict[str, float]:
+        for status, p in v.items():
+            if not 0.0 <= p <= 1.0:
+                raise ValueError(f"play_probability[{status!r}] must be in [0, 1], got {p}")
+        return {k.strip().lower(): float(p) for k, p in v.items()}
+
+    def probability_for(self, status: str | None) -> float:
+        """P(this player suits up), from their injury status."""
+        if status is None:
+            return self.default_probability
+        return self.play_probability.get(status.strip().lower(), self.default_probability)
+
+
 class LeagueConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -159,3 +187,4 @@ class LeagueConfig(BaseModel):
     projection: ProjectionConfig
     simulation: SimulationConfig = Field(default_factory=SimulationConfig)
     recommendation: RecommendationConfig = Field(default_factory=RecommendationConfig)
+    lineup: LineupConfig = Field(default_factory=LineupConfig)

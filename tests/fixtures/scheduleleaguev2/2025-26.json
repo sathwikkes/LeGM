@@ -1,0 +1,102 @@
+{
+  "meta": {
+    "version": 1
+  },
+  "leagueSchedule": {
+    "seasonYear": "2025-26",
+    "gameDates": [
+      {
+        "gameDate": "10/05/2025 00:00:00",
+        "games": [
+          {
+            "gameId": "0012500001",
+            "gameDateEst": "2025-10-05T00:00:00Z",
+            "homeTeam": {
+              "teamTricode": "AAA",
+              "teamName": "Alphas"
+            },
+            "awayTeam": {
+              "teamTricode": "MEL",
+              "teamName": "Melbourne United"
+            }
+          }
+        ]
+      },
+      {
+        "gameDate": "10/21/2025 00:00:00",
+        "games": [
+          {
+            "gameId": "0022500001",
+            "gameDateEst": "2025-10-21T00:00:00Z",
+            "homeTeam": {
+              "teamTricode": "AAA",
+              "teamName": "Alphas"
+            },
+            "awayTeam": {
+              "teamTricode": "BBB",
+              "teamName": "Betas"
+            }
+          },
+          {
+            "gameId": "0022500002",
+            "gameDateEst": "2025-10-21T00:00:00Z",
+            "homeTeam": {
+              "teamTricode": "CCC",
+              "teamName": "Gammas"
+            },
+            "awayTeam": {
+              "teamTricode": "DDD",
+              "teamName": "Deltas"
+            }
+          }
+        ]
+      },
+      {
+        "gameDate": "10/22/2025 00:00:00",
+        "games": [
+          {
+            "gameId": "0022500003",
+            "gameDateEst": "2025-10-22T00:00:00Z",
+            "homeTeam": {
+              "teamTricode": "BBB",
+              "teamName": "Betas"
+            },
+            "awayTeam": {
+              "teamTricode": "CCC",
+              "teamName": "Gammas"
+            }
+          },
+          {
+            "gameId": "0022500099",
+            "gameDateEst": "2025-10-22T00:00:00Z",
+            "homeTeam": {
+              "teamTricode": "",
+              "teamName": "TBD"
+            },
+            "awayTeam": {
+              "teamTricode": "",
+              "teamName": "TBD"
+            }
+          }
+        ]
+      },
+      {
+        "gameDate": "04/20/2026 00:00:00",
+        "games": [
+          {
+            "gameId": "0042500101",
+            "gameDateEst": "2026-04-20T00:00:00Z",
+            "homeTeam": {
+              "teamTricode": "AAA",
+              "teamName": "Alphas"
+            },
+            "awayTeam": {
+              "teamTricode": "BBB",
+              "teamName": "Betas"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

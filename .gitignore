@@ -11,6 +11,9 @@ build/
 # `legm ingest` can run anywhere, including inside the deployed container, with no NBA requests.
 data/*.db
 data/drafts/
+# The exception: the raw schedule payload is ~4.5MB of broadcaster metadata.
+# The slim data/schedule/*.csv it produces is committed instead.
+data/raw/scheduleleaguev2/
 
 # Secrets and local config
 .env
