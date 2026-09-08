@@ -34,3 +34,23 @@ def pool_from_rankings(ranked: pd.DataFrame) -> dict[int, PlayerCard]:
 
 def load_pool(session: Session, league: LeagueConfig, include_inactive: bool = False) -> dict[int, PlayerCard]:
     return pool_from_rankings(rank_players(session, league, include_inactive=include_inactive))
+
+
+def picks_needed(league: LeagueConfig, num_teams: int | None = None) -> int:
+    """Total picks a full draft consumes. `num_teams` overrides the configured
+    league size, matching new_draft's override."""
+    n = num_teams or league.league.num_teams
+    return n * (league.roster.num_starting_slots + league.roster.bench)
+
+
+def pool_shortfall(pool: dict[int, PlayerCard], league: LeagueConfig, num_teams: int | None = None) -> str | None:
+    """Message describing why a real pool cannot fill a draft, else None.
+
+    Checked where a real pool meets a real team count (API, CLI) rather than in
+    new_draft, which stays permissive for synthetic pools in tests and sims.
+    """
+    needed = picks_needed(league, num_teams)
+    if len(pool) >= needed:
+        return None
+    n = num_teams or league.league.num_teams
+    return f"player pool has {len(pool)} players, too few for {n} teams ({needed} picks)"

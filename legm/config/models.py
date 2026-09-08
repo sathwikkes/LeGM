@@ -37,11 +37,14 @@ STAT_KEYS: tuple[str, ...] = (
 )
 
 
+MAX_TEAMS = 20  # Yahoo's ceiling; also the per-draft override limit.
+
+
 class LeagueInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = "default"
-    num_teams: int = Field(gt=1)
+    num_teams: int = Field(gt=1, le=MAX_TEAMS)
     draft_type: Literal["snake", "auction"] = "snake"
     format: Literal["h2h_points", "h2h_categories", "roto"] = "h2h_points"
 

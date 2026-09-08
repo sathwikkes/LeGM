@@ -6,6 +6,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from legm.config.models import MAX_TEAMS
+
 
 class PlayerOut(BaseModel):
     player_id: int
@@ -205,6 +207,9 @@ class PreferencesIn(PreferencesOut):
 class CreateDraftIn(BaseModel):
     name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     user_slot: int = Field(ge=1, description="1-based draft slot")
+    num_teams: int | None = Field(
+        default=None, ge=2, le=MAX_TEAMS, description="Overrides the configured league size for this draft"
+    )
     team_names: list[str] | None = None
     include_inactive: bool = False
 
@@ -223,6 +228,7 @@ class SimulateIn(BaseModel):
 class LeagueOut(BaseModel):
     name: str
     num_teams: int
+    max_teams: int = MAX_TEAMS
     draft_type: str
     format: str
     slots: list[str]

@@ -247,3 +247,40 @@ def test_cors_origin_normalization(tmp_path):
             assert r.status_code == 200 and r.headers["access-control-allow-origin"] == origin
         r = c.options("/api/auth/login", headers={"Origin": "https://evil.example.net", "Access-Control-Request-Method": "POST"})
         assert "access-control-allow-origin" not in r.headers
+
+
+def test_create_draft_with_team_count(client):
+    """The fixture league is 2 teams; a draft may choose its own size."""
+    assert client.get("/api/league").json()["max_teams"] == 20
+    d = client.post("/api/drafts", json={"name": "t3", "user_slot": 3, "num_teams": 3}).json()
+    assert d["config"]["num_teams"] == 3
+    assert d["config"]["team_names"] == ["Team 1", "Team 2", "Team 3"]
+    assert d["config"]["user_team_index"] == 2
+    assert d["clock"]["total_picks"] == 3  # 3 teams x 1 round
+    assert len(d["rosters"]) == 3
+    assert [s["num_teams"] for s in client.get("/api/drafts").json() if s["draft_id"] == "t3"] == [3]
+
+    # omitting num_teams still uses the configured league size
+    assert client.post("/api/drafts", json={"name": "t0", "user_slot": 1}).json()["config"]["num_teams"] == 2
+
+
+def test_create_draft_team_count_validation(client):
+    # slot must sit inside the chosen team count
+    assert client.post("/api/drafts", json={"name": "x1", "user_slot": 4, "num_teams": 3}).status_code == 422
+    # schema bounds
+    assert client.post("/api/drafts", json={"name": "x2", "user_slot": 1, "num_teams": 1}).status_code == 422
+    assert client.post("/api/drafts", json={"name": "x3", "user_slot": 1, "num_teams": 21}).status_code == 422
+    # 4 teams x 1 round needs 4 players; the fixture pool holds 3
+    r = client.post("/api/drafts", json={"name": "x4", "user_slot": 1, "num_teams": 4})
+    assert r.status_code == 422 and "too few" in r.json()["detail"]
+
+
+def test_recommendations_follow_the_drafts_team_count(client):
+    """Scarcity demand is num_teams x starting slots, so it must come from the
+    draft's own league config rather than the process-wide one."""
+    client.post("/api/drafts", json={"name": "r2", "user_slot": 1})
+    client.post("/api/drafts", json={"name": "r3", "user_slot": 1, "num_teams": 3})
+    two = client.get("/api/drafts/r2/recommendations").json()
+    three = client.get("/api/drafts/r3/recommendations").json()
+    assert two["recommendations"] and three["recommendations"]
+    assert three["scarcity"] != two["scarcity"]

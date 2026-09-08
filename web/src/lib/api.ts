@@ -139,6 +139,7 @@ export type LLMStatus = { available: boolean; model: string; tools: string[] };
 export type League = {
   name: string;
   num_teams: number;
+  max_teams: number;
   draft_type: string;
   format: string;
   slots: string[];
@@ -204,7 +205,7 @@ export const api = {
     request<Player[]>(`/api/players${qs(params)}`),
   // drafts
   drafts: () => request<DraftSummary[]>("/api/drafts"),
-  createDraft: (body: { name: string; user_slot: number; team_names?: string[] | null }) =>
+  createDraft: (body: { name: string; user_slot: number; num_teams?: number; team_names?: string[] | null }) =>
     request<Draft>("/api/drafts", { method: "POST", body: JSON.stringify(body) }),
   draft: (id: string) => request<Draft>(`/api/drafts/${id}`),
   deleteDraft: (id: string) => request<void>(`/api/drafts/${id}`, { method: "DELETE" }),

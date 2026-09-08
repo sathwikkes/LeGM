@@ -67,3 +67,23 @@ def test_draft_lifecycle(tmp_path, monkeypatch):
 def test_ambiguous_and_missing_draft(tmp_path):
     r = runner.invoke(app, ["draft", "status", "--draft-dir", str(tmp_path)])
     assert r.exit_code == 1 and "No drafts" in r.output
+
+
+def test_draft_new_num_teams(tmp_path, monkeypatch):
+    runner = CliRunner()
+    db = _ingest(tmp_path, monkeypatch)
+    ddir = str(tmp_path / "drafts")
+    cfg = tmp_path / "league.yaml"
+    cfg.write_text(CONFIG.read_text().replace("num_teams: 8", "num_teams: 2").replace(
+        "slots: [PG, SG, G, SF, PF, F, C, C, UTIL, UTIL]", "slots: [UTIL]").replace("bench: 3", "bench: 0"))
+    base = ["--draft-dir", ddir, "--config", str(cfg), "--db", db]
+
+    r = runner.invoke(app, ["draft", "new", "--name", "t3", "--user-slot", "3", "--num-teams", "3", *base])
+    assert r.exit_code == 0, r.output
+    assert "Your next pick: #3" in r.output
+    r = runner.invoke(app, ["draft", "board", "--draft", "t3", "--draft-dir", ddir])
+    assert r.exit_code == 0 and "Team 3" in r.output
+
+    # 4 teams x 1 round needs 4 players; only 3 fixture players are active
+    r = runner.invoke(app, ["draft", "new", "--name", "t4", "--user-slot", "1", "--num-teams", "4", *base])
+    assert r.exit_code == 1 and "too few for 4 teams" in r.output

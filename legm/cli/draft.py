@@ -15,7 +15,7 @@ from legm.data.db import init_db, make_engine, session_scope
 from legm.data.names import normalize_name
 from legm.draft.models import DraftState, PlayerCard
 from legm.draft.persistence import DEFAULT_DRAFT_DIR, list_drafts, load_draft, save_draft
-from legm.draft.pool import load_pool
+from legm.draft.pool import load_pool, pool_shortfall
 from legm.draft.simulate import simulate
 from legm.draft.state import (
     DraftError,
@@ -101,6 +101,7 @@ def _clock_line(state: DraftState) -> str:
 def new(
     name: Annotated[str, typer.Option(help="Draft id (file name)")],
     user_slot: Annotated[int, typer.Option(help="Your draft slot, 1-based")],
+    num_teams: Annotated[int | None, typer.Option(help="Teams in this draft (default: config league.num_teams)")] = None,
     team_names: Annotated[str | None, typer.Option(help="Comma-separated team names")] = None,
     include_inactive: Annotated[bool, typer.Option()] = False,
     config: Annotated[Path | None, typer.Option("--config")] = None,
@@ -116,9 +117,14 @@ def new(
     if not pool:
         console.print("[red]Empty player pool. Run `legm ingest` first.[/red]")
         raise typer.Exit(code=1)
+    if num_teams is not None and (short := pool_shortfall(pool, league, num_teams)):
+        console.print(f"[red]{short}. Run `legm ingest` or lower --num-teams.[/red]")
+        raise typer.Exit(code=1)
     names = [n.strip() for n in team_names.split(",")] if team_names else None
     try:
-        state = new_draft(league, pool, user_team_index=user_slot - 1, team_names=names, draft_id=name)
+        state = new_draft(
+            league, pool, user_team_index=user_slot - 1, team_names=names, draft_id=name, num_teams=num_teams
+        )
     except DraftError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
