@@ -10,6 +10,7 @@ import ComparePanel from "./ComparePanel";
 import DraftBoard from "./DraftBoard";
 import OpponentsPanel from "./OpponentsPanel";
 import Recommendations from "./Recommendations";
+import LineupPanel from "./LineupPanel";
 import RosterPanel from "./RosterPanel";
 
 export default function DraftRoom({ draftId }: { draftId: string }) {
@@ -150,6 +151,7 @@ export default function DraftRoom({ draftId }: { draftId: string }) {
         <div className="space-y-4">
           <ChatPanel draftId={draftId} />
           <RosterPanel draft={draft} />
+          <LineupPanel draft={draft} />
           <div>
             <div className="mb-2 flex gap-2 text-xs">
               {(["board", "log", "opponents"] as const).map((t) => (
