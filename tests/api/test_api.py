@@ -284,3 +284,58 @@ def test_recommendations_follow_the_drafts_team_count(client):
     three = client.get("/api/drafts/r3/recommendations").json()
     assert two["recommendations"] and three["recommendations"]
     assert three["scarcity"] != two["scarcity"]
+
+
+def test_lineup_endpoint(client, tmp_path):
+    """The fixture league is 2 teams x 1 UTIL slot; players are DEN, MEM, BOS."""
+    from typer.testing import CliRunner
+
+    from legm.cli.main import app as cli
+
+    client.post("/api/drafts", json={"name": "lu", "user_slot": 1})
+    client.post("/api/drafts/lu/picks", json={"player_id": 1})  # Jokić (DEN) to team 0
+
+    # no schedule loaded yet
+    r = client.get("/api/drafts/lu/lineup", params={"date": "2025-12-25"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["schedule_loaded"] is False and body["games_scheduled"] == 0
+    assert body["expected_points"] == 0.0
+    assert [b["reason"] for b in body["bench"]] == ["no_game"]
+
+    csv = tmp_path / "s.csv"
+    csv.write_text("game_date,home_team,away_team\n2025-12-25,DEN,MEM\n")
+    r = CliRunner().invoke(cli, ["load-schedule", str(csv), "--db", client.db_url])
+    assert r.exit_code == 0, r.output
+
+    body = client.get("/api/drafts/lu/lineup", params={"date": "2025-12-25"}).json()
+    assert body["schedule_loaded"] is True and body["games_scheduled"] == 1
+    assert body["team_index"] == 0 and body["team_name"] == "Team 1"
+    assert body["date"] == "2025-12-25"
+    starters = [s for s in body["slots"] if s["player"]]
+    assert len(starters) == 1 and starters[0]["slot"] == "UTIL"
+    assert starters[0]["player"]["name"] == "Nikola Jokić"
+    assert starters[0]["player"]["opponent"] == "MEM"
+    assert starters[0]["player"]["play_probability"] == 1.0
+    assert body["expected_points"] > 0 and body["expected_points"] == body["raw_points"]
+    assert body["bench"] == [] and body["empty_slots"] == []
+
+    # a date with no games benches everyone
+    body = client.get("/api/drafts/lu/lineup", params={"date": "2025-12-26"}).json()
+    assert body["schedule_loaded"] is True and body["games_scheduled"] == 0
+    assert body["players_without_games"] == 1 and body["expected_points"] == 0.0
+
+
+def test_lineup_defaults_and_validation(client):
+    client.post("/api/drafts", json={"name": "lu2", "user_slot": 2})
+    # team defaults to the user's, date defaults to today
+    body = client.get("/api/drafts/lu2/lineup").json()
+    assert body["team_index"] == 1
+    assert len(body["date"]) == 10
+
+    assert client.get("/api/drafts/lu2/lineup", params={"team": 0}).json()["team_index"] == 0
+    assert client.get("/api/drafts/lu2/lineup", params={"team": 5}).status_code == 422
+    assert client.get("/api/drafts/lu2/lineup", params={"team": -1}).status_code == 422
+    assert client.get("/api/drafts/lu2/lineup", params={"date": "25-12-2025"}).status_code == 422
+    assert client.get("/api/drafts/lu2/lineup", params={"date": "not-a-date"}).status_code == 422
+    assert client.get("/api/drafts/nope/lineup").status_code == 404

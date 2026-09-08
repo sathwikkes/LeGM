@@ -38,4 +38,5 @@ def client(tmp_path, monkeypatch):
         assert r.status_code == 201, r.text
         c.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
         c.token = r.json()["access_token"]
+        c.db_url = db  # so tests can load fixtures into the same database
         yield c

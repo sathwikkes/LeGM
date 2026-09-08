@@ -5,7 +5,10 @@ Annotated[..., Depends(...)] objects, which are closure-local.
 """
 
 import os
+from datetime import date as date_cls
+from datetime import datetime
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
@@ -42,6 +45,7 @@ from legm.api.schemas import (
     DraftSummaryOut,
     FeedbackIn,
     LeagueOut,
+    LineupOut,
     OpponentsOut,
     PickIn,
     PlayerOut,
@@ -52,19 +56,31 @@ from legm.api.schemas import (
     SurvivalOut,
 )
 from legm.api.store import DraftExists, DraftNotFound, DraftStore
-from legm.api.views import available_out, draft_out, league_out, player_out_from_row, summary_out
+from legm.api.views import available_out, draft_out, league_out, lineup_out, player_out_from_row, summary_out
 from legm.api.ws import DraftHub
 from legm.config import load_league_config
 from legm.config.models import LeagueConfig
 from legm.data.db import init_db, make_engine, session_scope
 from legm.draft.models import DraftState
 from legm.data.models import User, UserPreference
+from legm.data.schedule import games_on, has_schedule, teams_playing_on
 from legm.draft.pool import load_pool, pool_shortfall
+from legm.draft.roster import build_slots
+from legm.engine.lineup import optimize_lineup, player_days
 from legm.draft.simulate import simulate
-from legm.draft.state import DraftError, make_pick, new_draft, undo
+from legm.draft.state import DraftError, make_pick, new_draft, team_roster, undo
 from legm.draft.strategies import make_strategy
 from legm.engine.rankings import rank_players
 from legm.integrations import apply_external_picks, parse_picks_text
+
+
+# NBA game dates are Eastern: a West-coast game tipping at 22:30 PT is still
+# "tonight" in the schedule, and a UTC clock would already have rolled over.
+NBA_TZ = ZoneInfo("America/New_York")
+
+
+def today_eastern() -> date_cls:
+    return datetime.now(NBA_TZ).date()
 
 
 class Settings:
@@ -314,6 +330,32 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         if not 2 <= len(player_ids) <= 5:
             raise HTTPException(status_code=422, detail="compare 2 to 5 players")
         return await run_in_threadpool(compare_out, state, state.league, survival_cache, user.id, player_ids, prefs_for(user))
+
+    @app.get("/api/drafts/{draft_id}/lineup", response_model=LineupOut)
+    async def get_lineup(
+        state: StateDep, user: UserDep, date: str | None = None, team: int | None = None
+    ) -> LineupOut:
+        """The highest expected-points legal lineup for one team on one date."""
+        team_index = state.config.user_team_index if team is None else team
+        if not 0 <= team_index < state.config.num_teams:
+            raise HTTPException(status_code=422, detail=f"team must be in [0, {state.config.num_teams})")
+        try:
+            day = date_cls.fromisoformat(date) if date else today_eastern()
+        except ValueError:
+            raise HTTPException(status_code=422, detail="date must be YYYY-MM-DD") from None
+
+        def build() -> LineupOut:
+            roster = team_roster(state, team_index)
+            cards = {pid: state.pool[pid] for pid in roster.player_ids}
+            with session_scope(engine) as session:
+                opponents = teams_playing_on(session, day)
+                loaded = has_schedule(session)
+                games = len(games_on(session, day))
+            days = player_days(cards, opponents, state.league.lineup)
+            lineup = optimize_lineup(days, build_slots(state.league), day)
+            return lineup_out(state, team_index, lineup, games, loaded)
+
+        return await run_in_threadpool(build)
 
     @app.post("/api/drafts/{draft_id}/feedback", response_model=PreferencesOut)
     async def post_feedback(state: StateDep, user: UserDep, body: FeedbackIn, draft_id: str) -> PreferencesOut:

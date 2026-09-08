@@ -24,16 +24,21 @@ from legm.engine.vorp import replacement_levels
 from legm.api.schemas import (
     AvailableOut,
     AvailablePlayerOut,
+    BenchedPlayerOut,
     ClockOut,
     DraftConfigOut,
     DraftOut,
     DraftSummaryOut,
     LeagueOut,
+    LineupOut,
+    LineupPlayerOut,
+    LineupSlotOut,
     PickOut,
     PlayerOut,
     RosterOut,
     SlotOut,
 )
+from legm.engine.lineup import Lineup, PlayerDay
 
 
 def player_out(card: PlayerCard, **overrides) -> PlayerOut:
@@ -188,6 +193,46 @@ def available_out(
             )
         )
     return AvailableOut(players=players, replacement_levels=levels, total=total)
+
+
+def lineup_player_out(p: PlayerDay) -> LineupPlayerOut:
+    return LineupPlayerOut(
+        player_id=p.player_id,
+        name=p.name,
+        positions=[x.value for x in p.positions],
+        team=p.team,
+        fpg=p.fpg,
+        injury_status=p.injury_status,
+        opponent=p.opponent,
+        play_probability=p.play_probability,
+        expected_points=p.expected_points,
+    )
+
+
+def lineup_out(
+    state: DraftState,
+    team_index: int,
+    lineup: Lineup,
+    games_scheduled: int,
+    schedule_loaded: bool,
+) -> LineupOut:
+    return LineupOut(
+        date=lineup.day.isoformat(),
+        team_index=team_index,
+        team_name=state.config.team_names[team_index],
+        slots=[
+            LineupSlotOut(slot=s.slot, player=None if s.player is None else lineup_player_out(s.player))
+            for s in lineup.slots
+        ],
+        bench=[BenchedPlayerOut(player=lineup_player_out(b.player), reason=b.reason) for b in lineup.bench],
+        expected_points=lineup.expected_points,
+        raw_points=lineup.raw_points,
+        points_left_on_bench=lineup.points_left_on_bench,
+        empty_slots=list(lineup.empty_slots),
+        players_without_games=lineup.players_without_games,
+        games_scheduled=games_scheduled,
+        schedule_loaded=schedule_loaded,
+    )
 
 
 def league_out(league: LeagueConfig) -> LeagueOut:

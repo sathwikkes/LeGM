@@ -87,3 +87,33 @@ def test_draft_new_num_teams(tmp_path, monkeypatch):
     # 4 teams x 1 round needs 4 players; only 3 fixture players are active
     r = runner.invoke(app, ["draft", "new", "--name", "t4", "--user-slot", "1", "--num-teams", "4", *base])
     assert r.exit_code == 1 and "too few for 4 teams" in r.output
+
+
+def test_draft_lineup_cli(tmp_path, monkeypatch):
+    runner = CliRunner()
+    db = _ingest(tmp_path, monkeypatch)
+    ddir = str(tmp_path / "drafts")
+    cfg = tmp_path / "league.yaml"
+    cfg.write_text(CONFIG.read_text().replace("num_teams: 8", "num_teams: 2").replace(
+        "slots: [PG, SG, G, SF, PF, F, C, C, UTIL, UTIL]", "slots: [UTIL]").replace("bench: 3", "bench: 0"))
+    base = ["--draft-dir", ddir]
+    runner.invoke(app, ["draft", "new", "--name", "lu", "--user-slot", "1", "--config", str(cfg), "--db", db, *base])
+    runner.invoke(app, ["draft", "pick", "jokic", *base])  # Jokić (DEN) to team 0
+
+    # no schedule stored yet
+    r = runner.invoke(app, ["draft", "lineup", "--draft", "lu", "--date", "2025-12-25", "--db", db, *base])
+    assert r.exit_code == 0, r.output
+    assert "No schedule stored" in r.output and "no game" in r.output
+
+    csv = tmp_path / "s.csv"
+    csv.write_text("game_date,home_team,away_team\n2025-12-25,DEN,MEM\n")
+    assert runner.invoke(app, ["load-schedule", str(csv), "--db", db]).exit_code == 0
+
+    r = runner.invoke(app, ["draft", "lineup", "--draft", "lu", "--date", "2025-12-25", "--db", db, *base])
+    assert r.exit_code == 0, r.output
+    assert "Nikola" in r.output and "1 games scheduled" in r.output and "from 1 starters" in r.output
+
+    r = runner.invoke(app, ["draft", "lineup", "--draft", "lu", "--date", "25/12/2025", "--db", db, *base])
+    assert r.exit_code == 1 and "must be YYYY-MM-DD" in r.output
+    r = runner.invoke(app, ["draft", "lineup", "--draft", "lu", "--team", "7", "--db", db, *base])
+    assert r.exit_code == 1 and "--team must be in" in r.output

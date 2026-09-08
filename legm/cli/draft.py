@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import date as date_cls
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import typer
@@ -13,6 +16,7 @@ from rich.table import Table
 from legm.config import load_league_config
 from legm.data.db import init_db, make_engine, session_scope
 from legm.data.names import normalize_name
+from legm.data.schedule import games_on, has_schedule, teams_playing_on
 from legm.draft.models import DraftState, PlayerCard
 from legm.draft.persistence import DEFAULT_DRAFT_DIR, list_drafts, load_draft, save_draft
 from legm.draft.pool import load_pool, pool_shortfall
@@ -32,9 +36,13 @@ from legm.draft.state import (
     undo,
     user_next_pick,
 )
+from legm.draft.roster import build_slots
 from legm.draft.strategies import STRATEGIES, make_strategy
+from legm.engine.lineup import optimize_lineup, player_days
 
-draft_app = typer.Typer(help="Live draft state: new, pick, undo, status, board, sim.", no_args_is_help=True)
+draft_app = typer.Typer(help="Live draft state: new, pick, undo, status, board, sim, lineup.", no_args_is_help=True)
+# NBA game dates are Eastern; a UTC clock would roll over during West-coast games.
+NBA_TZ = ZoneInfo("America/New_York")
 console = Console()
 
 DraftDirOpt = Annotated[Path, typer.Option("--draft-dir", help="Where draft JSON files live")]
@@ -209,6 +217,70 @@ def status(
             "" if r["ADP"] is None or pd.isna(r["ADP"]) else f"{r['ADP']:.1f}",
         )
     console.print(t)
+
+
+@draft_app.command()
+def lineup(
+    date: Annotated[str | None, typer.Option(help="YYYY-MM-DD (default: today, US Eastern)")] = None,
+    team: Annotated[int | None, typer.Option(help="Team index (default: yours)")] = None,
+    draft: DraftOpt = None,
+    draft_dir: DraftDirOpt = DEFAULT_DRAFT_DIR,
+    db: Annotated[str | None, typer.Option("--db")] = None,
+) -> None:
+    """Best legal lineup for a date: FP/G x P(play), for players whose team is playing."""
+    state = _load(draft, draft_dir)
+    team_index = state.config.user_team_index if team is None else team
+    if not 0 <= team_index < state.config.num_teams:
+        console.print(f"[red]--team must be in [0, {state.config.num_teams}).[/red]")
+        raise typer.Exit(code=1)
+    try:
+        day = date_cls.fromisoformat(date) if date else datetime.now(NBA_TZ).date()
+    except ValueError:
+        console.print("[red]--date must be YYYY-MM-DD.[/red]")
+        raise typer.Exit(code=1) from None
+
+    roster = team_roster(state, team_index)
+    cards = {pid: state.pool[pid] for pid in roster.player_ids}
+    engine = make_engine(db)
+    init_db(engine)
+    with session_scope(engine) as session:
+        opponents = teams_playing_on(session, day)
+        loaded = has_schedule(session)
+        games = len(games_on(session, day))
+    if not loaded:
+        console.print("[yellow]No schedule stored. Run `legm ingest-schedule --season 2025-26` first.[/yellow]")
+
+    result = optimize_lineup(player_days(cards, opponents, state.league.lineup), build_slots(state.league), day)
+    t = Table(title=f"{roster.name} — {day.isoformat()} ({games} games scheduled)")
+    for col, justify in (("Slot", "left"), ("Player", "left"), ("Pos", "left"), ("Opp", "left"),
+                         ("FP/G", "right"), ("P(play)", "right"), ("xFP", "right")):
+        t.add_column(col, justify=justify)
+    for slot in result.slots:
+        p = slot.player
+        if p is None:
+            t.add_row(slot.slot, "[dim]-[/dim]", "", "", "", "", "")
+        else:
+            t.add_row(
+                slot.slot, p.name, ",".join(x.value for x in p.positions), p.opponent or "",
+                f"{p.fpg:.1f}", f"{p.play_probability:.0%}", f"{p.expected_points:.1f}",
+            )
+    console.print(t)
+    console.print(
+        f"Expected: [bold]{result.expected_points:.1f}[/bold] FP "
+        f"(raw {result.raw_points:.1f}) from {len(result.starters)} starters."
+        + (f" Empty: {', '.join(result.empty_slots)}." if result.empty_slots else ""),
+        soft_wrap=True,
+    )
+    if result.bench:
+        labels = {"no_game": "no game", "ruled_out": "ruled out", "outscored": "no slot"}
+        t = Table(title="Bench")
+        for col in ("Player", "Pos", "Reason", "xFP"):
+            t.add_column(col, justify="right" if col == "xFP" else "left")
+        for b in result.bench:
+            t.add_row(b.player.name, ",".join(x.value for x in b.player.positions),
+                      labels[b.reason], f"{b.player.expected_points:.1f}")
+        console.print(t)
+        console.print(f"Points left on the bench (lineup congestion): {result.points_left_on_bench:.1f} FP.", soft_wrap=True)
 
 
 @draft_app.command()

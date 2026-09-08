@@ -186,6 +186,45 @@ class CompareOut(BaseModel):
     until_pick: int | None
 
 
+class LineupPlayerOut(BaseModel):
+    player_id: int
+    name: str
+    positions: list[str]
+    team: str | None
+    fpg: float
+    injury_status: str | None
+    opponent: str | None  # None when the NBA team is idle that day
+    play_probability: float
+    expected_points: float
+
+
+class LineupSlotOut(BaseModel):
+    slot: str
+    player: LineupPlayerOut | None
+
+
+class BenchedPlayerOut(BaseModel):
+    player: LineupPlayerOut
+    reason: str  # no_game | ruled_out | outscored
+
+
+class LineupOut(BaseModel):
+    date: str
+    team_index: int
+    team_name: str
+    slots: list[LineupSlotOut]
+    bench: list[BenchedPlayerOut]
+    expected_points: float
+    raw_points: float
+    points_left_on_bench: float
+    empty_slots: list[str]
+    players_without_games: int
+    games_scheduled: int
+    # False when no schedule has been loaded at all, so the UI can tell
+    # "nobody plays today" apart from "run legm ingest-schedule".
+    schedule_loaded: bool
+
+
 class FeedbackIn(BaseModel):
     player_id: int
     vote: int = Field(ge=-1, le=1)
