@@ -16,11 +16,12 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY legm ./legm
 COPY config ./config
 COPY README.md ./
+COPY data/raw ./data/raw
 RUN uv sync --frozen --no-dev
 
 # Player data lives here (SQLite by default). Mount a volume here, or point
 # LEGM_DATABASE_URL at Postgres so the container stays stateless.
-RUN mkdir -p /app/data/raw && useradd --create-home --uid 10001 legm && chown -R legm:legm /app
+RUN useradd --create-home --uid 10001 legm && chown -R legm:legm /app
 USER legm
 
 ENV PATH="/app/.venv/bin:$PATH" LEGM_CORS_ORIGINS="http://localhost:3000" PORT=8000

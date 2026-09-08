@@ -192,8 +192,10 @@ docker compose run --rm api legm ingest --seasons 2024-25 2025-26
 
 Standalone images: `docker build -t legm-api .` and
 `docker build -t legm-web --build-arg NEXT_PUBLIC_API_URL=https://your-api -f web/Dockerfile web`.
-The API image expects `LEGM_DATABASE_URL` (SQLite under the `/app/data` volume by default, or
-Postgres) and serves HTTP plus the WebSocket on port 8000. stats.nba.com often blocks cloud IPs,
-so run `legm ingest` from a machine it allows and ship `data/raw` (the cache) or the database.
+The API image expects `LEGM_DATABASE_URL` (SQLite under `/app/data` by default, or Postgres) and
+serves HTTP plus the WebSocket on `$PORT` (default 8000). The raw nba_api cache in `data/raw` is
+committed and copied into the image, so `legm ingest --seasons 2024-25 2025-26` works inside the
+deployed container (for example Railway's Console tab) with zero network calls. To refresh player
+data, delete `data/raw`, run ingest locally, and commit the new cache.
 
 CI (`.github/workflows/ci.yml`) runs pytest, the web lint/typecheck/build, and both Docker builds.

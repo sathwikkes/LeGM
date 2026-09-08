@@ -7,8 +7,8 @@ __pycache__/
 dist/
 build/
 
-# Local data (raw nba_api cache, SQLite, saved drafts)
-data/raw/
+# Local data (SQLite, saved drafts). data/raw (the nba_api cache) is committed on purpose so
+# `legm ingest` can run anywhere, including inside the deployed container, with no NBA requests.
 data/*.db
 data/drafts/
 
