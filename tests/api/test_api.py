@@ -7,6 +7,7 @@ from starlette.websockets import WebSocketDisconnect
 
 def test_health_and_league(client):
     assert client.get("/api/health").json() == {"status": "ok"}
+    assert client.get("/").json()["docs"] == "/docs"
     league = client.get("/api/league").json()
     assert league["num_teams"] == 2 and league["scoring"]["REB"] == 1.2
 

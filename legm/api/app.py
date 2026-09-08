@@ -184,6 +184,10 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
 
     # ---- meta ---------------------------------------------------------------
 
+    @app.get("/", include_in_schema=False)
+    def root() -> dict:
+        return {"name": "LeGM API", "version": app.version, "health": "/api/health", "docs": "/docs"}
+
     @app.get("/api/health")
     def health() -> dict:
         return {"status": "ok"}
