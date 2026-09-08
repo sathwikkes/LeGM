@@ -29,5 +29,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
     CMD python -c "import os,urllib.request,sys; sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/api/health', timeout=3).status == 200 else 1)"
 
-# Shell form so $PORT (set by Railway, Fly, Render, etc.) is honoured.
-CMD uvicorn legm.api.app:app --host 0.0.0.0 --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips='*'
+# JSON form (signals reach uvicorn via exec) while still honouring $PORT from the platform.
+CMD ["sh", "-c", "exec uvicorn legm.api.app:app --host 0.0.0.0 --port \"${PORT:-8000}\" --proxy-headers --forwarded-allow-ips='*'"]
