@@ -66,14 +66,22 @@ def _specificity_order(slots: Sequence[Slot]) -> list[int]:
     return sorted(starts, key=lambda i: (len(slots[i].positions), i))
 
 
-def match_starters(
+def match_in_order(
     players: Mapping[int, Sequence[Position]],
     slots: Sequence[Slot],
+    player_order: Sequence[int] | None = None,
 ) -> dict[int, int]:
-    """Maximum matching of player_id -> starting slot index.
+    """Greedy maximum matching of player_id -> starting slot index.
 
-    Players are processed in insertion order (draft order); slots are tried
-    most-specific first so a PG lands in PG before G before UTIL.
+    Players are offered a slot one at a time in `player_order` (default: the
+    mapping's own order) via an augmenting path, so a player admitted earlier is
+    never dropped -- they may only be shifted (PG -> G) to make room. Slots are
+    tried most-specific first so a PG lands in PG before G before UTIL.
+
+    Offering players in descending value order additionally maximizes the total
+    value of the matched set: matchable player sets form a transversal matroid,
+    and greedy by weight finds a maximum-weight basis of a matroid. That is what
+    legm.engine.lineup relies on.
     """
     order = _specificity_order(slots)
     slot_to_player: dict[int, int] = {}
@@ -92,9 +100,17 @@ def match_starters(
                 return True
         return False
 
-    for pid in players:
+    for pid in player_order if player_order is not None else players:
         try_place(pid, set())
     return {pid: si for si, pid in slot_to_player.items()}
+
+
+def match_starters(
+    players: Mapping[int, Sequence[Position]],
+    slots: Sequence[Slot],
+) -> dict[int, int]:
+    """Maximum matching of player_id -> starting slot index, in draft order."""
+    return match_in_order(players, slots)
 
 
 def assign(players: Mapping[int, Sequence[Position]], slots: Sequence[Slot]) -> dict[str, int | None] | None:
