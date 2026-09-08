@@ -30,3 +30,7 @@ web/next-env.d.ts
 *.log
 .idea/
 .vscode/
+
+# Claude Code
+.claude/
+CLAUDE.md
