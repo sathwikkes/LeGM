@@ -413,7 +413,9 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
 
     @app.post("/api/drafts/{draft_id}/chat", response_model=ChatOut)
     async def post_chat(state: StateDep, user: UserDep, body: ChatIn) -> ChatOut:
-        ctx = ToolContext(state=state, league=state.league, cache=survival_cache, owner_id=user.id, prefs=prefs_for(user))
+        ctx = ToolContext(
+            state=state, league=state.league, cache=survival_cache, owner_id=user.id, prefs=prefs_for(user), engine=engine
+        )
         try:
             result = await run_in_threadpool(run_chat, ctx, [m.model_dump() for m in body.messages], llm_client)
         except LLMUnavailable as exc:

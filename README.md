@@ -61,6 +61,7 @@ VORP = season FP − lowest replacement level among the player's eligible positi
 
 ```bash
 uv run legm draft new --name mydraft --user-slot 4      # pool from current rankings
+uv run legm draft new --name big --user-slot 3 --num-teams 12   # override the configured league size
 uv run legm draft pick "jokic"                          # fuzzy name or nba_id; team on the clock
 uv run legm draft undo
 uv run legm draft status --top 15                       # clock, your roster, best available
@@ -73,6 +74,12 @@ uv run legm draft list
 Drafts persist as JSON under `data/drafts/<name>.json` (`--draft NAME` selects one; the
 most recently modified is the default). The pool is a snapshot of the rankings at
 `draft new`, so a live draft never depends on the database.
+
+`league.num_teams` in `config/league.yaml` is the *default* team count. `--num-teams` (and the
+Teams selector on the web form, and `num_teams` in `POST /api/drafts`) overrides it for one
+draft, 2 to 20. The override is snapshotted onto that draft's own league config, so replacement
+levels, positional scarcity and opponent modelling all follow it — every per-draft computation
+reads `state.league`, never the process-wide config.
 
 - `DraftState` is immutable: `make_pick` and `undo` return new states. Rosters are derived
   from the pick log, so undo is exact.
@@ -165,7 +172,8 @@ aversion, ADP sensitivity) by 0.1 per vote. Preferences scale the weights by up 
 (`get_draft_state`, `get_my_roster`, `get_available_players`, `get_player_projection`,
 `get_player_value`, `compare_players`, `get_roster_needs`, `get_position_scarcity`,
 `simulate_until_next_pick`, `get_probability_of_return`, `get_opponent_rosters`,
-`get_injury_context`, `generate_ranked_recommendations`). The model never computes numbers.
+`get_injury_context`, `generate_ranked_recommendations`, `optimize_lineup`). The model never
+computes numbers.
 Without `ANTHROPIC_API_KEY` the endpoint returns 503 and the UI shows the assistant as offline;
 everything else keeps working.
 
@@ -181,6 +189,60 @@ and an OAuth access token. `POST /api/drafts/{id}/import-picks {format, content}
 
 `uv run legm load-injuries file.csv` (columns: name or nba_id, status, note) replaces the injury
 report; status feeds the DOS injury penalty and is shown in the UI.
+
+# Phase 9: NBA schedule and the daily lineup optimizer
+
+```bash
+uv run legm ingest-schedule --season 2025-26     # nba_api -> data/schedule/2025-26.csv + games table
+uv run legm load-schedule data/schedule/2025-26.csv --season 2025-26   # offline path, e.g. in the container
+uv run legm draft lineup --draft mydraft --date 2025-12-25             # best legal lineup that day
+```
+
+Once a roster is set, the optimizer answers "who do I start tonight?". For a given date it takes
+the players whose NBA team is playing, discounts each by the chance they suit up, and fills the
+starting slots to maximize
+
+```
+expected points = FP/G x P(play)
+```
+
+`P(play)` comes from `lineup.play_probability` in `config/league.yaml`, keyed by injury status
+(`out: 0`, `doubtful: 0.25`, `questionable: 0.5`, `probable: 0.9`). Statuses are matched
+case-insensitively and anything unlisted falls back to `default_probability`, so an unrecognised
+status never silently benches a player.
+
+The result is exact, not a heuristic: sets of players that can be matched to distinct starting
+slots form a transversal matroid, so offering players in descending expected-points order to the
+same augmenting-path matcher the draft uses yields a maximum-weight basis. `tests/engine/test_lineup.py`
+checks that against exhaustive brute force on 25 randomised rosters.
+
+Every benched player is labelled `no_game`, `ruled_out` or `outscored`, and the response reports
+**points left on the bench** — expected production lost to lineup congestion rather than to the
+schedule or an injury. That is the "usable fantasy points" figure SPEC.md asks for under Roster Fit.
+
+`GET /api/drafts/{id}/lineup?date=YYYY-MM-DD&team=N` (both optional; date defaults to today in US
+Eastern, team to yours) and the **Optimize lineup** panel in the draft room. `schedule_loaded`
+distinguishes "nobody plays today" from "no schedule has been ingested".
+
+## Schedule data
+
+`ingest-schedule` reads `scheduleleaguev2`, which answers with nested JSON rather than the
+`resultSets` shape the other endpoints use. The raw payload is ~4.5MB of broadcaster metadata, so
+it is **gitignored**; the 41KB slim CSV it writes (`data/schedule/<season>.csv`) is committed
+instead, and `load-schedule` reads it back so ingest stays offline inside the container.
+
+A season payload also carries preseason games (some against non-NBA clubs like MEL and HAP),
+All-Star, the NBA Cup final, the play-in and the playoffs — none of which score fantasy points.
+Every game stores its type, parsed from the NBA game-id prefix, and both ingest and the day
+queries default to the regular season: 1230 games, 30 teams, 82 each. `--season-type` overrides.
+
+### Known limitations
+
+- Projections are season-long per-game averages. There is no opponent or matchup adjustment, so
+  "best combo" means the best expected FP/G combination, not a true nightly projection.
+- Injury status comes only from the manual `legm load-injuries` CSV; there is no live feed, so
+  stale injury data yields stale lineups.
+- Back-to-backs, minutes restrictions and rest days are not modelled.
 
 # Docker and deployment
 

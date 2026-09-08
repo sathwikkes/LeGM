@@ -47,3 +47,39 @@ def test_tool_errors_are_returned_not_raised(ctx):
     assert "bad arguments" in json.loads(execute_tool(ctx, "get_my_roster", {"x": 1}))["error"]
     assert "no player" in json.loads(execute_tool(ctx, "get_player_projection", {"player": "Nobody"}))["error"]
     assert "unresolved" in json.loads(execute_tool(ctx, "compare_players", {"players": ["Nobody", "Player 003"]}))
+
+
+def test_optimize_lineup_tool(draft, default_config, session):
+    """Without an engine the tool reports no schedule rather than failing; with
+    one it returns the day's lineup."""
+    from datetime import date
+
+    from legm.data.schedule import upsert_games
+    from legm.engine.lineup import NO_GAME
+
+    # a complete draft, so the user's roster is actually full
+    state = simulate(draft)
+    ctx = ToolContext(state=state, league=default_config, cache=SurvivalCache(), owner_id=1)
+
+    out = json.loads(execute_tool(ctx, "optimize_lineup", {"date": "2025-12-25"}))
+    assert out["schedule_loaded"] is False and out["games_scheduled"] == 0
+    assert out["starters"] == [] and {b["reason"] for b in out["bench"]} == {NO_GAME}
+    assert out["date"] == "2025-12-25" and out["team"] == "Team 3"
+
+    # the conftest pool assigns teams T00..T29; give a couple of them a game
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        [{"GAME_DATE": date(2025, 12, 25), "HOME_TEAM": "T00", "AWAY_TEAM": "T01",
+          "GAME_ID": None, "SEASON_TYPE": "regular"}]
+    )
+    upsert_games(session, frame, "2025-26")
+    ctx.engine = session.get_bind()
+
+    out = json.loads(execute_tool(ctx, "optimize_lineup", {"date": "2025-12-25"}))
+    assert out["schedule_loaded"] is True and out["games_scheduled"] == 1
+    assert all(s["opponent"] for s in out["starters"])
+    assert out["expected_points"] >= 0
+
+    assert "team must be in" in json.loads(execute_tool(ctx, "optimize_lineup", {"team": 99}))["error"]
+    assert "YYYY-MM-DD" in json.loads(execute_tool(ctx, "optimize_lineup", {"date": "12/25/2025"}))["error"]
