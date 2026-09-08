@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+from rich.console import Console
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,21 @@ from legm.config.models import (
 from legm.data.models import Base, Player, SeasonStat
 from legm.draft.models import PlayerCard
 from legm.draft.state import new_draft
+
+
+@pytest.fixture(autouse=True)
+def plain_cli_console(monkeypatch):
+    """Pin the CLI's Rich consoles to plain text.
+
+    Rich emits ANSI colour and number highlighting whenever it believes it is
+    attached to a terminal, which depends on the ambient environment (FORCE_COLOR,
+    an interactive shell, the CI runner). The CLI tests assert on substrings of
+    captured output, so without this they pass under `pytest | tail` and fail when
+    run straight in a terminal.
+    """
+    plain = Console(force_terminal=False, no_color=True, highlight=False)
+    for module in ("legm.cli.main", "legm.cli.draft"):
+        monkeypatch.setattr(f"{module}.console", plain, raising=False)
 
 
 @pytest.fixture
