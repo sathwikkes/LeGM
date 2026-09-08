@@ -6,8 +6,9 @@ import uuid
 from collections.abc import Mapping, Sequence
 
 import pandas as pd
+from pydantic import ValidationError
 
-from legm.config.models import LeagueConfig, Position
+from legm.config.models import MAX_TEAMS, LeagueConfig, LeagueInfo, Position
 from legm.draft.models import DraftConfig, DraftState, Pick, PlayerCard, TeamRoster
 from legm.draft.order import next_pick_for_team, pick_to_round_team, picks_until_team
 from legm.draft.roster import assign, build_slots, can_add, open_bench_slots, open_positions
@@ -37,7 +38,17 @@ def new_draft(
     team_names: Sequence[str] | None = None,
     draft_id: str | None = None,
     rounds: int | None = None,
+    num_teams: int | None = None,
 ) -> DraftState:
+    """Start a draft. `num_teams` overrides the configured league size for this
+    draft only: the override is snapshotted onto the state's own league config,
+    so replacement levels, scarcity and opponent modelling all follow it."""
+    if num_teams is not None and num_teams != league.league.num_teams:
+        try:
+            info = LeagueInfo.model_validate({**league.league.model_dump(), "num_teams": num_teams})
+        except ValidationError as exc:
+            raise DraftError(f"num_teams must be in [2, {MAX_TEAMS}], got {num_teams}") from exc
+        league = league.model_copy(update={"league": info})
     n = league.league.num_teams
     if not 0 <= user_team_index < n:
         raise DraftError(f"user_team_index must be in [0, {n})")

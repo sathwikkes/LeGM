@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pandas as pd
@@ -112,6 +112,82 @@ def season_player_stats(season: str, cache: RawCache) -> pd.DataFrame:
     frame = frame.rename(columns={"MIN": "MPG"})
     frame["SEASON"] = season
     return frame
+
+
+def _fetch_schedule(season: str) -> dict:
+    from nba_api.stats.endpoints import scheduleleaguev2
+
+    ep = scheduleleaguev2.ScheduleLeagueV2(season=season, timeout=REQUEST_TIMEOUT)
+    return ep.get_dict()
+
+
+# NBA game-id prefixes. A 2025-26 payload holds 71 preseason games (including
+# ones against non-NBA clubs like MEL and HAP), 1230 regular-season games, the
+# All-Star weekend, the NBA Cup final, the play-in and the playoffs. Only the
+# regular season scores fantasy points, so the type travels with every game.
+GAME_TYPES = {
+    "001": "preseason",
+    "002": "regular",
+    "003": "allstar",
+    "004": "playoffs",
+    "005": "playin",
+    "006": "cup",
+}
+REGULAR_SEASON = "regular"
+
+
+def game_type(game_id: str | None) -> str:
+    """Season type from an NBA game id. Unknown or missing ids read as regular
+    season, so a hand-written schedule CSV without ids still works."""
+    if not game_id or len(str(game_id)) < 3:
+        return REGULAR_SEASON
+    return GAME_TYPES.get(str(game_id)[:3], REGULAR_SEASON)
+
+
+def parse_schedule(payload: dict) -> pd.DataFrame:
+    """Flatten a scheduleleaguev2 payload to GAME_DATE / HOME_TEAM / AWAY_TEAM /
+    GAME_ID / SEASON_TYPE.
+
+    This endpoint answers with nested JSON (leagueSchedule.gameDates[].games[])
+    rather than the resultSets shape the other endpoints use, so it needs its
+    own parser. Games without both tricodes (placeholder play-in and finals
+    rows) are dropped.
+    """
+    rows = []
+    for game_date in payload.get("leagueSchedule", {}).get("gameDates", []):
+        for game in game_date.get("games", []):
+            home = (game.get("homeTeam") or {}).get("teamTricode")
+            away = (game.get("awayTeam") or {}).get("teamTricode")
+            # gameDateEst is ISO ("2025-10-21T00:00:00Z"); gameDate is US-style.
+            raw_date = game.get("gameDateEst") or game.get("gameDate") or game_date.get("gameDate")
+            if not home or not away or not raw_date:
+                continue
+            game_id = str(game.get("gameId")) if game.get("gameId") else None
+            rows.append(
+                {
+                    "GAME_DATE": pd.to_datetime(raw_date, format="mixed").date(),
+                    "HOME_TEAM": str(home).upper(),
+                    "AWAY_TEAM": str(away).upper(),
+                    "GAME_ID": game_id,
+                    "SEASON_TYPE": game_type(game_id),
+                }
+            )
+    frame = pd.DataFrame(rows, columns=["GAME_DATE", "HOME_TEAM", "AWAY_TEAM", "GAME_ID", "SEASON_TYPE"])
+    return frame.drop_duplicates(subset=["GAME_DATE", "HOME_TEAM", "AWAY_TEAM"]).sort_values(
+        ["GAME_DATE", "HOME_TEAM"], ignore_index=True
+    )
+
+
+def season_schedule(season: str, cache: RawCache, season_types: Sequence[str] | None = None) -> pd.DataFrame:
+    """Scheduled games in `season`, one row per game.
+
+    Defaults to the regular season only: preseason opponents are not always NBA
+    teams, and no other game type scores fantasy points.
+    """
+    payload = cache.get_or_fetch("scheduleleaguev2", season, lambda: _fetch_schedule(season))
+    frame = parse_schedule(payload)
+    wanted = set(season_types) if season_types is not None else {REGULAR_SEASON}
+    return frame[frame["SEASON_TYPE"].isin(wanted)].reset_index(drop=True)
 
 
 def season_player_index(season: str, cache: RawCache) -> pd.DataFrame:

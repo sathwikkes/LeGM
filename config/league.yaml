@@ -56,3 +56,17 @@ recommendation:
     injury: 0.20          # penalty for injury status
     uncertainty: 0.05     # penalty for low projection confidence
     return: 0.35          # penalty scaled by P(available at your next pick) x value
+
+# Daily lineup optimizer (Phase 9). Injury status -> probability the player
+# suits up; the optimizer maximizes FP/G x P(play) over legal starting slots.
+# Statuses are matched case-insensitively; anything not listed here uses
+# default_probability, so an unknown status never silently benches a player.
+lineup:
+  play_probability:
+    out: 0.0
+    doubtful: 0.25
+    questionable: 0.5
+    day-to-day: 0.5
+    probable: 0.9
+    healthy: 1.0
+  default_probability: 1.0

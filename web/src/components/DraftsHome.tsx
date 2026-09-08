@@ -11,8 +11,13 @@ export default function DraftsHome() {
   const [league, setLeague] = useState<League | null>(null);
   const [name, setName] = useState("");
   const [slot, setSlot] = useState(1);
+  const [teams, setTeams] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Until /api/league answers, fall back to the config default the API also uses.
+  const numTeams = teams ?? league?.num_teams ?? 8;
+  const maxTeams = league?.max_teams ?? 20;
 
   const refresh = () => api.drafts().then(setDrafts).catch((e) => setError(e.message));
   useEffect(() => {
@@ -20,12 +25,17 @@ export default function DraftsHome() {
     api.league().then(setLeague).catch((e) => setError(e.message));
   }, []);
 
+  const changeTeams = (n: number) => {
+    setTeams(n);
+    if (slot > n) setSlot(n); // keep the draft slot inside the new team count
+  };
+
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const d = await api.createDraft({ name: name.trim(), user_slot: slot });
+      const d = await api.createDraft({ name: name.trim(), user_slot: slot, num_teams: numTeams });
       router.push(`/draft/${d.draft_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -46,7 +56,7 @@ export default function DraftsHome() {
         <h2 className="mb-3 text-base font-semibold">New draft</h2>
         {league && (
           <p className="mb-3 text-xs text-slate-400">
-            {league.num_teams} teams · {league.draft_type} · {league.format} · {league.slots.join(" ")} + {league.bench} BN
+            {league.draft_type} · {league.format} · {league.slots.join(" ")} + {league.bench} BN
           </p>
         )}
         <form onSubmit={create} className="space-y-3">
@@ -62,13 +72,27 @@ export default function DraftsHome() {
             />
           </label>
           <label className="block text-sm">
+            <span className="text-slate-300">Teams</span>
+            <select
+              value={numTeams}
+              onChange={(e) => changeTeams(Number(e.target.value))}
+              className="mt-1 w-full rounded border border-white/10 bg-[#0b1220] px-2 py-1.5"
+            >
+              {Array.from({ length: maxTeams - 1 }, (_, i) => i + 2).map((n) => (
+                <option key={n} value={n}>
+                  {n} teams{n === league?.num_teams ? " (league default)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-sm">
             <span className="text-slate-300">Your draft slot</span>
             <select
               value={slot}
               onChange={(e) => setSlot(Number(e.target.value))}
               className="mt-1 w-full rounded border border-white/10 bg-[#0b1220] px-2 py-1.5"
             >
-              {Array.from({ length: league?.num_teams ?? 8 }, (_, i) => (
+              {Array.from({ length: numTeams }, (_, i) => (
                 <option key={i} value={i + 1}>
                   Pick {i + 1}
                 </option>

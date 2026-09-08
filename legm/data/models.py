@@ -6,9 +6,9 @@ at query time so a config change automatically re-values every player.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
-from sqlalchemy import Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Date, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from legm.config.models import STAT_KEYS, Position
@@ -97,6 +97,26 @@ class Projection(StatColumnsMixin, Base):
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, nullable=False)
 
     player: Mapped[Player] = relationship(back_populates="projections")
+
+
+class Game(Base):
+    """One scheduled NBA game. Team codes are tricodes (LAL, BOS), matching
+    Player.team, so "does my player have a game tonight" is a set lookup."""
+
+    __tablename__ = "games"
+    __table_args__ = (
+        UniqueConstraint("season", "game_date", "home_team", "away_team", name="uq_games_slot"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
+    game_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    home_team: Mapped[str] = mapped_column(String(8), nullable=False)
+    away_team: Mapped[str] = mapped_column(String(8), nullable=False)
+    nba_game_id: Mapped[str | None] = mapped_column(String(20))
+    # preseason | regular | allstar | playin | playoffs | cup. Only "regular"
+    # scores fantasy points; see legm.data.nba.GAME_TYPES.
+    season_type: Mapped[str] = mapped_column(String(16), nullable=False, default="regular")
 
 
 class Adp(Base):

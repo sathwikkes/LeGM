@@ -5,7 +5,10 @@ Annotated[..., Depends(...)] objects, which are closure-local.
 """
 
 import os
+from datetime import date as date_cls
+from datetime import datetime
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
@@ -42,6 +45,7 @@ from legm.api.schemas import (
     DraftSummaryOut,
     FeedbackIn,
     LeagueOut,
+    LineupOut,
     OpponentsOut,
     PickIn,
     PlayerOut,
@@ -52,19 +56,31 @@ from legm.api.schemas import (
     SurvivalOut,
 )
 from legm.api.store import DraftExists, DraftNotFound, DraftStore
-from legm.api.views import available_out, draft_out, league_out, player_out_from_row, summary_out
+from legm.api.views import available_out, draft_out, league_out, lineup_out, player_out_from_row, summary_out
 from legm.api.ws import DraftHub
 from legm.config import load_league_config
 from legm.config.models import LeagueConfig
 from legm.data.db import init_db, make_engine, session_scope
 from legm.draft.models import DraftState
 from legm.data.models import User, UserPreference
-from legm.draft.pool import load_pool
+from legm.data.schedule import games_on, has_schedule, teams_playing_on
+from legm.draft.pool import load_pool, pool_shortfall
+from legm.draft.roster import build_slots
+from legm.engine.lineup import optimize_lineup, player_days
 from legm.draft.simulate import simulate
-from legm.draft.state import DraftError, make_pick, new_draft, undo
+from legm.draft.state import DraftError, make_pick, new_draft, team_roster, undo
 from legm.draft.strategies import make_strategy
 from legm.engine.rankings import rank_players
 from legm.integrations import apply_external_picks, parse_picks_text
+
+
+# NBA game dates are Eastern: a West-coast game tipping at 22:30 PT is still
+# "tonight" in the schedule, and a UTC clock would already have rolled over.
+NBA_TZ = ZoneInfo("America/New_York")
+
+
+def today_eastern() -> date_cls:
+    return datetime.now(NBA_TZ).date()
 
 
 class Settings:
@@ -243,8 +259,17 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
                 pool = load_pool(session, league, include_inactive=body.include_inactive)
             if not pool:
                 raise ValueError("player pool is empty; run `legm ingest` first")
+            # Only validate an explicit override: raising the team count is the new
+            # way to outgrow the pool. Config-sized drafts keep their old behaviour.
+            if body.num_teams is not None and (short := pool_shortfall(pool, league, body.num_teams)):
+                raise ValueError(f"{short}; run `legm ingest` or lower the team count")
             return new_draft(
-                league, pool, user_team_index=body.user_slot - 1, team_names=body.team_names, draft_id=body.name
+                league,
+                pool,
+                user_team_index=body.user_slot - 1,
+                team_names=body.team_names,
+                draft_id=body.name,
+                num_teams=body.num_teams,
             )
 
         try:
@@ -277,7 +302,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         limit: Annotated[int, Query(ge=1, le=1000)] = 50,
         offset: Annotated[int, Query(ge=0)] = 0,
     ) -> AvailableOut:
-        _, surv = survival_cache.get_or_compute(user.id, state, league)
+        _, surv = survival_cache.get_or_compute(user.id, state, state.league)
         return available_out(
             state, team_index=team, query=q, position=position, limit=limit, offset=offset, p_return=surv.probabilities
         )
@@ -286,15 +311,15 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     async def get_recommendations(
         state: StateDep, user: UserDep, top: Annotated[int, Query(ge=1, le=20)] = 3, team: int | None = None
     ) -> RecommendationsOut:
-        return await run_in_threadpool(recommend, state, league, survival_cache, user.id, prefs_for(user), team, top)
+        return await run_in_threadpool(recommend, state, state.league, survival_cache, user.id, prefs_for(user), team, top)
 
     @app.get("/api/drafts/{draft_id}/survival", response_model=SurvivalOut)
     async def get_survival(state: StateDep, user: UserDep) -> SurvivalOut:
-        return await run_in_threadpool(survival_out, state, league, survival_cache, user.id)
+        return await run_in_threadpool(survival_out, state, state.league, survival_cache, user.id)
 
     @app.get("/api/drafts/{draft_id}/opponents", response_model=OpponentsOut)
     async def get_opponents(state: StateDep, user: UserDep, top: Annotated[int, Query(ge=1, le=10)] = 4) -> OpponentsOut:
-        return await run_in_threadpool(opponents_out, state, league, survival_cache, user.id, top)
+        return await run_in_threadpool(opponents_out, state, state.league, survival_cache, user.id, top)
 
     @app.get("/api/drafts/{draft_id}/compare", response_model=CompareOut)
     async def get_compare(state: StateDep, user: UserDep, ids: str) -> CompareOut:
@@ -304,7 +329,33 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             raise HTTPException(status_code=422, detail="ids must be comma-separated integers") from None
         if not 2 <= len(player_ids) <= 5:
             raise HTTPException(status_code=422, detail="compare 2 to 5 players")
-        return await run_in_threadpool(compare_out, state, league, survival_cache, user.id, player_ids, prefs_for(user))
+        return await run_in_threadpool(compare_out, state, state.league, survival_cache, user.id, player_ids, prefs_for(user))
+
+    @app.get("/api/drafts/{draft_id}/lineup", response_model=LineupOut)
+    async def get_lineup(
+        state: StateDep, user: UserDep, date: str | None = None, team: int | None = None
+    ) -> LineupOut:
+        """The highest expected-points legal lineup for one team on one date."""
+        team_index = state.config.user_team_index if team is None else team
+        if not 0 <= team_index < state.config.num_teams:
+            raise HTTPException(status_code=422, detail=f"team must be in [0, {state.config.num_teams})")
+        try:
+            day = date_cls.fromisoformat(date) if date else today_eastern()
+        except ValueError:
+            raise HTTPException(status_code=422, detail="date must be YYYY-MM-DD") from None
+
+        def build() -> LineupOut:
+            roster = team_roster(state, team_index)
+            cards = {pid: state.pool[pid] for pid in roster.player_ids}
+            with session_scope(engine) as session:
+                opponents = teams_playing_on(session, day)
+                loaded = has_schedule(session)
+                games = len(games_on(session, day))
+            days = player_days(cards, opponents, state.league.lineup)
+            lineup = optimize_lineup(days, build_slots(state.league), day)
+            return lineup_out(state, team_index, lineup, games, loaded)
+
+        return await run_in_threadpool(build)
 
     @app.post("/api/drafts/{draft_id}/feedback", response_model=PreferencesOut)
     async def post_feedback(state: StateDep, user: UserDep, body: FeedbackIn, draft_id: str) -> PreferencesOut:
@@ -312,7 +363,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="player not in this draft's pool")
         if body.vote == 0:
             raise HTTPException(status_code=422, detail="vote must be +1 or -1")
-        comp = await run_in_threadpool(compare_out, state, league, survival_cache, user.id, [body.player_id, body.player_id], prefs_for(user))
+        comp = await run_in_threadpool(compare_out, state, state.league, survival_cache, user.id, [body.player_id, body.player_id], prefs_for(user))
         components = comp.players[0].components
         card = state.pool[body.player_id]
         with session_scope(engine) as s:
@@ -362,7 +413,9 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
 
     @app.post("/api/drafts/{draft_id}/chat", response_model=ChatOut)
     async def post_chat(state: StateDep, user: UserDep, body: ChatIn) -> ChatOut:
-        ctx = ToolContext(state=state, league=league, cache=survival_cache, owner_id=user.id, prefs=prefs_for(user))
+        ctx = ToolContext(
+            state=state, league=state.league, cache=survival_cache, owner_id=user.id, prefs=prefs_for(user), engine=engine
+        )
         try:
             result = await run_in_threadpool(run_chat, ctx, [m.model_dump() for m in body.messages], llm_client)
         except LLMUnavailable as exc:

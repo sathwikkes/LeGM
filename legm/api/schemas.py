@@ -6,6 +6,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from legm.config.models import MAX_TEAMS
+
 
 class PlayerOut(BaseModel):
     player_id: int
@@ -184,6 +186,45 @@ class CompareOut(BaseModel):
     until_pick: int | None
 
 
+class LineupPlayerOut(BaseModel):
+    player_id: int
+    name: str
+    positions: list[str]
+    team: str | None
+    fpg: float
+    injury_status: str | None
+    opponent: str | None  # None when the NBA team is idle that day
+    play_probability: float
+    expected_points: float
+
+
+class LineupSlotOut(BaseModel):
+    slot: str
+    player: LineupPlayerOut | None
+
+
+class BenchedPlayerOut(BaseModel):
+    player: LineupPlayerOut
+    reason: str  # no_game | ruled_out | outscored
+
+
+class LineupOut(BaseModel):
+    date: str
+    team_index: int
+    team_name: str
+    slots: list[LineupSlotOut]
+    bench: list[BenchedPlayerOut]
+    expected_points: float
+    raw_points: float
+    points_left_on_bench: float
+    empty_slots: list[str]
+    players_without_games: int
+    games_scheduled: int
+    # False when no schedule has been loaded at all, so the UI can tell
+    # "nobody plays today" apart from "run legm ingest-schedule".
+    schedule_loaded: bool
+
+
 class FeedbackIn(BaseModel):
     player_id: int
     vote: int = Field(ge=-1, le=1)
@@ -205,6 +246,9 @@ class PreferencesIn(PreferencesOut):
 class CreateDraftIn(BaseModel):
     name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     user_slot: int = Field(ge=1, description="1-based draft slot")
+    num_teams: int | None = Field(
+        default=None, ge=2, le=MAX_TEAMS, description="Overrides the configured league size for this draft"
+    )
     team_names: list[str] | None = None
     include_inactive: bool = False
 
@@ -223,6 +267,7 @@ class SimulateIn(BaseModel):
 class LeagueOut(BaseModel):
     name: str
     num_teams: int
+    max_teams: int = MAX_TEAMS
     draft_type: str
     format: str
     slots: list[str]

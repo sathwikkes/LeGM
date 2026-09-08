@@ -17,7 +17,14 @@ from legm.data.crosswalk import load_yahoo_positions
 from legm.data.csv_io import load_adp_csv, load_injuries_csv, load_projection_csv, read_csv
 from legm.data.db import init_db, make_engine, session_scope
 from legm.data.ingest import ingest_seasons
-from legm.data.nba import DEFAULT_RAW_DIR, DEFAULT_SLEEP_SECONDS, RawCache
+from legm.data.nba import DEFAULT_RAW_DIR, DEFAULT_SLEEP_SECONDS, GAME_TYPES, RawCache, season_schedule
+from legm.data.schedule import (
+    DEFAULT_SCHEDULE_DIR,
+    read_schedule_csv,
+    schedule_path,
+    upsert_games,
+    write_schedule_csv,
+)
 from legm.engine.rankings import RANK_COLUMNS, rank_players
 
 app = typer.Typer(help="LeGM: deterministic fantasy NBA draft engine.", no_args_is_help=True)
@@ -71,6 +78,53 @@ def ingest(
         f"{report.projections_built} v0 projections ({report.live_calls} live API calls).",
         soft_wrap=True,
     )
+
+
+@app.command("ingest-schedule")
+def ingest_schedule(
+    season: Annotated[str, typer.Option("--season", help="Season like 2025-26")],
+    raw_dir: Annotated[Path, typer.Option(help="Raw response cache directory")] = DEFAULT_RAW_DIR,
+    schedule_dir: Annotated[Path, typer.Option(help="Where the slim CSV is written")] = DEFAULT_SCHEDULE_DIR,
+    sleep: Annotated[float, typer.Option(help="Seconds between live nba_api calls")] = DEFAULT_SLEEP_SECONDS,
+    season_types: Annotated[
+        list[str] | None,
+        typer.Option("--season-type", help=f"Game types to keep (default: regular). One of: {', '.join(sorted(set(GAME_TYPES.values())))}"),
+    ] = None,
+    db: DbOpt = None,
+) -> None:
+    """Pull the NBA schedule via nba_api, write the slim CSV, and store the games."""
+    if season_types and (bad := sorted(set(season_types) - set(GAME_TYPES.values()))):
+        console.print(f"[red]Unknown season type(s): {', '.join(bad)}[/red]")
+        raise typer.Exit(code=1)
+    cache = RawCache(raw_dir=raw_dir, sleep_seconds=sleep)
+    frame = season_schedule(season, cache, season_types or None)
+    if frame.empty:
+        console.print(f"[red]No games parsed for {season}.[/red]")
+        raise typer.Exit(code=1)
+    path = write_schedule_csv(frame, schedule_path(season, schedule_dir))
+    with session_scope(_engine(db)) as session:
+        added = upsert_games(session, frame, season)
+    console.print(
+        f"{season}: {len(frame)} games -> {path} ({added} new, {len(frame) - added} already stored).",
+        soft_wrap=True,
+    )
+
+
+@app.command("load-schedule")
+def load_schedule(
+    file: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    season: Annotated[str | None, typer.Option("--season", help="Season label (default: the file stem)")] = None,
+    db: DbOpt = None,
+) -> None:
+    """Load a schedule CSV (columns: game_date, home_team, away_team)."""
+    try:
+        frame = read_schedule_csv(file)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    with session_scope(_engine(db)) as session:
+        added = upsert_games(session, frame, season or file.stem)
+    console.print(f"Loaded {added} new games from {file.name} ({len(frame)} rows).", soft_wrap=True)
 
 
 @app.command("load-projections")

@@ -139,12 +139,41 @@ export type LLMStatus = { available: boolean; model: string; tools: string[] };
 export type League = {
   name: string;
   num_teams: number;
+  max_teams: number;
   draft_type: string;
   format: string;
   slots: string[];
   bench: number;
   il: number;
   scoring: Record<string, number>;
+};
+export type LineupPlayer = {
+  player_id: number;
+  name: string;
+  positions: string[];
+  team: string | null;
+  fpg: number;
+  injury_status: string | null;
+  opponent: string | null;
+  play_probability: number;
+  expected_points: number;
+};
+export type LineupSlot = { slot: string; player: LineupPlayer | null };
+export type BenchReason = "no_game" | "ruled_out" | "outscored";
+export type BenchedPlayer = { player: LineupPlayer; reason: BenchReason };
+export type Lineup = {
+  date: string;
+  team_index: number;
+  team_name: string;
+  slots: LineupSlot[];
+  bench: BenchedPlayer[];
+  expected_points: number;
+  raw_points: number;
+  points_left_on_bench: number;
+  empty_slots: string[];
+  players_without_games: number;
+  games_scheduled: number;
+  schedule_loaded: boolean;
 };
 export type ImportReport = { applied: number; skipped: { pick_number: number; player_name: string; reason: string }[]; draft: Draft };
 
@@ -204,7 +233,7 @@ export const api = {
     request<Player[]>(`/api/players${qs(params)}`),
   // drafts
   drafts: () => request<DraftSummary[]>("/api/drafts"),
-  createDraft: (body: { name: string; user_slot: number; team_names?: string[] | null }) =>
+  createDraft: (body: { name: string; user_slot: number; num_teams?: number; team_names?: string[] | null }) =>
     request<Draft>("/api/drafts", { method: "POST", body: JSON.stringify(body) }),
   draft: (id: string) => request<Draft>(`/api/drafts/${id}`),
   deleteDraft: (id: string) => request<void>(`/api/drafts/${id}`, { method: "DELETE" }),
@@ -222,6 +251,8 @@ export const api = {
     request<Draft>(`/api/drafts/${id}/simulate`, { method: "POST", body: JSON.stringify(body) }),
   importPicks: (id: string, format: "csv" | "json", content: string) =>
     request<ImportReport>(`/api/drafts/${id}/import-picks`, { method: "POST", body: JSON.stringify({ format, content }) }),
+  lineup: (id: string, params: { date?: string; team?: number } = {}) =>
+    request<Lineup>(`/api/drafts/${id}/lineup${qs(params)}`),
   // assistant
   llmStatus: () => request<LLMStatus>("/api/llm/status"),
   chat: (id: string, messages: ChatMessage[]) => request<ChatOut>(`/api/drafts/${id}/chat`, { method: "POST", body: JSON.stringify({ messages }) }),

@@ -2,6 +2,8 @@ import pytest
 
 from legm.config.models import Position as P
 from legm.draft.models import PlayerCard
+from legm.draft.pool import picks_needed, pool_shortfall
+from tests.conftest import make_pool
 from legm.draft.state import (
     DraftCompleteError,
     DraftError,
@@ -129,3 +131,50 @@ def test_available_frame_recomputes_vorp(draft):
     assert (after.loc[common, "VORP"] >= before.loc[common, "VORP"] - 1e-9).all()
     raw = available_frame(s, recompute_vorp=False)
     assert raw.loc[common[0], "VORP"] == draft.pool[int(common[0])].vorp
+
+
+def test_num_teams_override(default_config):
+    """The override is snapshotted onto the draft's own league config so every
+    derived quantity (replacement levels, scarcity, opponents) follows it."""
+    pool = make_pool(200)
+    s = new_draft(default_config, pool, user_team_index=0, num_teams=12)
+    assert s.config.num_teams == 12
+    assert s.league.league.num_teams == 12
+    assert default_config.league.num_teams == 8  # caller's config untouched
+    assert s.config.team_names == tuple(f"Team {i + 1}" for i in range(12))
+    assert s.config.rounds == 13 and s.config.total_picks == 156
+
+
+def test_num_teams_override_shifts_replacement_levels(default_config):
+    """More teams draft deeper, so the replacement baseline falls and VORP rises.
+    This is the whole reason the override has to reach the league config."""
+    pool = make_pool(200)
+    eight = available_frame(new_draft(default_config, pool, user_team_index=0, num_teams=8))
+    twelve = available_frame(new_draft(default_config, pool, user_team_index=0, num_teams=12))
+    top = eight["VORP"].idxmax()
+    assert twelve.loc[top, "VORP"] > eight.loc[top, "VORP"]
+
+
+def test_num_teams_override_validation(default_config, pool):
+    for bad in (1, 0, -3, 21):
+        with pytest.raises(DraftError):
+            new_draft(default_config, pool, user_team_index=0, num_teams=bad)
+    with pytest.raises(DraftError):  # slot outside the overridden team count
+        new_draft(default_config, pool, user_team_index=5, num_teams=4)
+    with pytest.raises(DraftError):  # team names must match the overridden count
+        new_draft(default_config, pool, user_team_index=0, num_teams=3, team_names=["a", "b"])
+
+
+def test_num_teams_override_none_uses_config(default_config, pool):
+    s = new_draft(default_config, pool, user_team_index=0, num_teams=None)
+    assert s.config.num_teams == default_config.league.num_teams
+
+
+def test_pool_shortfall_reports_only_when_short(default_config, pool):
+    """13 rounds x 20 teams = 260 picks; the 130-player pool cannot cover it.
+    new_draft itself stays permissive: the check guards the API and CLI, where a
+    real pool meets a real team count."""
+    assert pool_shortfall(pool, default_config, 8) is None
+    assert "too few for 20 teams" in pool_shortfall(pool, default_config, 20)
+    assert picks_needed(default_config, 12) == 156
+    assert picks_needed(default_config) == 104  # falls back to the configured size

@@ -10,17 +10,29 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date as date_cls
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
+
+from sqlalchemy.engine import Engine
 
 from legm.api.recommend import SurvivalCache, compare_out, opponents_out, recommend, survival_out
 from legm.api.views import available_out, draft_out
 from legm.config.models import LeagueConfig, Position
 from legm.data.names import normalize_name
 from legm.draft.models import DraftState
+from legm.data.db import session_scope
+from legm.data.schedule import games_on, has_schedule, teams_playing_on
+from legm.draft.roster import build_slots
 from legm.draft.simulate import simulate_until_user
 from legm.draft.state import team_roster
+from legm.engine.lineup import optimize_lineup, player_days
 from legm.draft.strategies import NeedsAware
 from legm.engine.opportunity import Preferences, position_scarcity
+
+# NBA game dates are Eastern; a UTC clock rolls over during West-coast games.
+NBA_TZ = ZoneInfo("America/New_York")
 
 
 @dataclass
@@ -30,6 +42,9 @@ class ToolContext:
     cache: SurvivalCache
     owner_id: int
     prefs: Preferences = Preferences()
+    # Only the schedule-backed tools need the database; without it optimize_lineup
+    # reports that no schedule is available rather than failing the whole request.
+    engine: Engine | None = None
 
 
 def _card(ctx: ToolContext, query: str | int):
@@ -183,6 +198,53 @@ def generate_ranked_recommendations(ctx: ToolContext, top: int = 5) -> dict:
     return recs.model_dump()
 
 
+def optimize_lineup_tool(ctx: ToolContext, date: str | None = None, team: int | None = None) -> dict:
+    """Best legal lineup for a date: FP/G x P(play) over players whose team is playing."""
+    team_index = ctx.state.config.user_team_index if team is None else team
+    if not 0 <= team_index < ctx.state.config.num_teams:
+        return {"error": f"team must be in [0, {ctx.state.config.num_teams})"}
+    try:
+        day = date_cls.fromisoformat(date) if date else datetime.now(NBA_TZ).date()
+    except ValueError:
+        return {"error": "date must be YYYY-MM-DD"}
+
+    roster = team_roster(ctx.state, team_index)
+    cards = {pid: ctx.state.pool[pid] for pid in roster.player_ids}
+    opponents: dict[str, str] = {}
+    loaded = False
+    games = 0
+    if ctx.engine is not None:
+        with session_scope(ctx.engine) as session:
+            opponents = teams_playing_on(session, day)
+            loaded = has_schedule(session)
+            games = len(games_on(session, day))
+
+    result = optimize_lineup(player_days(cards, opponents, ctx.state.league.lineup), build_slots(ctx.state.league), day)
+    return {
+        "date": day.isoformat(),
+        "team": ctx.state.config.team_names[team_index],
+        "schedule_loaded": loaded,
+        "games_scheduled": games,
+        "expected_points": round(result.expected_points, 1),
+        "raw_points": round(result.raw_points, 1),
+        "points_left_on_bench": round(result.points_left_on_bench, 1),
+        "empty_slots": list(result.empty_slots),
+        "starters": [
+            {
+                "slot": s.slot, "name": s.player.name, "positions": [p.value for p in s.player.positions],
+                "opponent": s.player.opponent, "fpg": round(s.player.fpg, 1),
+                "play_probability": s.player.play_probability,
+                "expected_points": round(s.player.expected_points, 1),
+            }
+            for s in result.slots if s.player is not None
+        ],
+        "bench": [
+            {"name": b.player.name, "reason": b.reason, "expected_points": round(b.player.expected_points, 1)}
+            for b in result.bench
+        ],
+    }
+
+
 TOOL_FUNCTIONS: dict[str, Callable[..., dict]] = {
     "get_draft_state": get_draft_state,
     "get_my_roster": get_my_roster,
@@ -197,6 +259,7 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict]] = {
     "get_opponent_rosters": get_opponent_rosters,
     "get_injury_context": get_injury_context,
     "generate_ranked_recommendations": generate_ranked_recommendations,
+    "optimize_lineup": optimize_lineup_tool,
 }
 
 _PLAYER = {"type": "string", "description": "Player name (fuzzy) or numeric player id"}
@@ -225,6 +288,8 @@ TOOL_DEFINITIONS: list[dict] = [
      "input_schema": {"type": "object", "properties": {"player": _PLAYER}, "additionalProperties": False}},
     {"name": "generate_ranked_recommendations", "description": "The engine's ranked recommendations for the team on the clock, with component scores and reasons.",
      "input_schema": {"type": "object", "properties": {"top": {"type": "integer", "minimum": 1, "maximum": 10}}, "additionalProperties": False}},
+    {"name": "optimize_lineup", "description": "Best legal starting lineup for a date, maximizing FP/G x P(play) over players whose NBA team is playing. Reports expected points, why each benched player is sitting, and points lost to lineup congestion.",
+     "input_schema": {"type": "object", "properties": {"date": {"type": "string", "description": "YYYY-MM-DD; defaults to today (US Eastern)"}, "team": {"type": "integer", "description": "0-based team index; defaults to the user"}}, "additionalProperties": False}},
 ]
 
 
