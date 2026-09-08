@@ -1,0 +1,58 @@
+# LeGM league configuration. This is the ONLY place scoring, roster slots,
+# team count and projection parameters live. Nothing is hard-coded elsewhere.
+
+league:
+  name: default
+  num_teams: 8
+  draft_type: snake        # snake | auction
+  format: h2h_points       # h2h_points | h2h_categories | roto
+
+roster:
+  # Starting slots, in Yahoo default order. Repeat a slot to have more than one.
+  slots: [PG, SG, G, SF, PF, F, C, C, UTIL, UTIL]
+  bench: 3
+  il: 1
+  # Which player positions may fill each slot. Slots not listed here
+  # (PG, SG, SF, PF, C) accept only players eligible at that exact position.
+  eligibility:
+    G: [PG, SG]
+    F: [SF, PF]
+    UTIL: [PG, SG, SF, PF, C]
+
+# Fantasy points per unit of each stat. Stats not listed score 0.
+# Available stat keys: PTS REB AST STL BLK TOV FGM FGA FTM FTA FG3M
+scoring:
+  PTS: 1
+  REB: 1.2
+  AST: 1.5
+  STL: 3
+  BLK: 3
+  TOV: -1
+
+projection:
+  # Nominal weight per season, most recent first. Renormalized per player
+  # over the seasons they actually played, and multiplied by total minutes.
+  season_weights: [0.65, 0.35]
+  gp_cap: 72
+
+# Monte Carlo availability simulation (Phase 5). Opponents pick by consensus
+# rank (ADP when loaded, else pool VORP rank) plus Gaussian noise.
+simulation:
+  n_sims: 500
+  adp_sigma: 6.0          # std dev of a player's draft position, in picks
+  needs_bonus: 3.0        # rank improvement for a player who fills an open starting slot
+  candidate_window: 80    # players considered per pick
+
+# Draft Opportunity Score weights (Phase 5/6). Components are normalized to
+# roughly [0, 1] before weighting; see legm/engine/opportunity.py.
+recommendation:
+  weights:
+    value: 1.0            # pool VORP relative to the best remaining
+    fit: 0.15             # fills an open starting slot
+    scarcity: 0.15        # depletion of above-replacement players at the position
+    gp: 0.10              # projected games played
+    upside: 0.05          # youth-driven upside
+    adp: 0.05             # ADP value (falling players)
+    injury: 0.20          # penalty for injury status
+    uncertainty: 0.05     # penalty for low projection confidence
+    return: 0.35          # penalty scaled by P(available at your next pick) x value

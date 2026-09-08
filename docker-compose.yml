@@ -1,0 +1,48 @@
+# Local production-like stack: Postgres + API + web.
+#   cp .env.example .env   # set LEGM_SECRET_KEY (and ANTHROPIC_API_KEY if you want the assistant)
+#   docker compose up --build
+#   docker compose run --rm api legm ingest --seasons 2024-25 2025-26   # first time; needs an IP nba.com allows
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: legm
+      POSTGRES_PASSWORD: legm
+      POSTGRES_DB: legm
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      LEGM_DATABASE_URL: postgresql+psycopg://legm:legm@db:5432/legm
+      LEGM_SECRET_KEY: ${LEGM_SECRET_KEY:?set LEGM_SECRET_KEY in .env}
+      LEGM_INVITE_CODE: ${LEGM_INVITE_CODE:-}
+      LEGM_CORS_ORIGINS: ${LEGM_CORS_ORIGINS:-http://localhost:3000}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LEGM_LLM_MODEL: ${LEGM_LLM_MODEL:-claude-opus-5}
+    volumes:
+      - ./data:/app/data      # raw nba_api cache so ingest reruns are free
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: ./web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:
