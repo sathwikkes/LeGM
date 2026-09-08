@@ -74,13 +74,16 @@ class Settings:
         database_url: str | None = None,
         cors_origins: list[str] | None = None,
         auth: AuthSettings | None = None,
+        cors_origin_regex: str | None = None,
     ):
         self.config_path = config_path
         self.database_url = database_url
         self.auth = auth or AuthSettings()
-        self.cors_origins = cors_origins or os.environ.get(
-            "LEGM_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
-        ).split(",")
+        raw = cors_origins or os.environ.get("LEGM_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+        # Browsers send the Origin header without a path, so a trailing slash would never match.
+        self.cors_origins = [o.strip().rstrip("/") for o in raw if o.strip()]
+        # Optional pattern, e.g. https://.*\.vercel\.app to allow every preview deployment.
+        self.cors_origin_regex = cors_origin_regex or os.environ.get("LEGM_CORS_ORIGIN_REGEX") or None
 
 
 def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
@@ -90,6 +93,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
+        allow_origin_regex=settings.cors_origin_regex,
         allow_methods=["*"],
         allow_headers=["*"],
     )

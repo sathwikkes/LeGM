@@ -225,3 +225,25 @@ def test_import_picks(client):
     assert body["applied"] == 1 and body["skipped"][0]["reason"].startswith("unresolved")
     assert body["draft"]["clock"]["current_pick"] == 2
     assert client.post("/api/drafts/imp/import-picks", json={"format": "xml", "content": "x"}).status_code == 422
+
+
+def test_cors_origin_normalization(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from legm.api.app import Settings, create_app
+    from legm.api.auth import AuthSettings
+
+    settings = Settings(
+        config_path=CONFIG_PATH,
+        database_url=f"sqlite:///{tmp_path / 'c.db'}",
+        auth=AuthSettings(secret="s" * 32),
+        cors_origins=["https://app.example.com/", " https://other.example.com "],
+        cors_origin_regex=r"https://.*\.vercel\.app",
+    )
+    assert settings.cors_origins == ["https://app.example.com", "https://other.example.com"]
+    with TestClient(create_app(settings)) as c:
+        for origin in ("https://app.example.com", "https://web-abc123.vercel.app"):
+            r = c.options("/api/auth/login", headers={"Origin": origin, "Access-Control-Request-Method": "POST"})
+            assert r.status_code == 200 and r.headers["access-control-allow-origin"] == origin
+        r = c.options("/api/auth/login", headers={"Origin": "https://evil.example.net", "Access-Control-Request-Method": "POST"})
+        assert "access-control-allow-origin" not in r.headers
